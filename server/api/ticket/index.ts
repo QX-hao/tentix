@@ -22,6 +22,7 @@ import {
   factory,
   staffOnlyMiddleware,
   customerOnlyMiddleware,
+  ticketCreationStaffOnlyMiddleware,
 } from "../middleware.ts";
 import { membersCols } from "../queryParams.ts";
 import { MyCache } from "@/utils/cache.ts";
@@ -83,6 +84,17 @@ const updateTicketStatusSchema = z.object({
   description: z.string().max(200, {
     message: "Description must be less than 200 characters",
   }),
+});
+
+const staffCreateTicketSchema = ticketInsertSchema.extend({
+  customerId: z.number().int().positive(),
+});
+
+const customerListItemSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string(),
+  nickname: z.string(),
+  realName: z.string(),
 });
 
 const ticketInfoResponseSchema = zs.ticket.extend({
@@ -250,6 +262,160 @@ const ticketRouter = factory
         status: "success",
         id: ticketId,
         createdAt: new Date().toISOString(),
+      });
+    },
+  )
+  .get(
+    "/customers",
+    ticketCreationStaffOnlyMiddleware(),
+    describeRoute({
+      description: "Get customers available for staff-created tickets",
+      tags: ["Ticket"],
+      responses: {
+        200: {
+          description: "Customer list",
+          content: {
+            "application/json": {
+              schema: resolver(z.array(customerListItemSchema)),
+            },
+          },
+        },
+      },
+    }),
+    async (c) => {
+      const customers = await c.var.db
+        .select({
+          id: schema.users.id,
+          name: schema.users.name,
+          nickname: schema.users.nickname,
+          realName: schema.users.realName,
+        })
+        .from(schema.users)
+        .where(eq(schema.users.role, "customer"))
+        .orderBy(asc(schema.users.name))
+        .limit(1000);
+
+      return c.json(customers);
+    },
+  )
+  .post(
+    "/create-for-customer",
+    ticketCreationStaffOnlyMiddleware(),
+    describeRoute({
+      tags: ["Ticket"],
+      description: "Create a ticket on behalf of a customer",
+      responses: {
+        200: {
+          description: "Return created ticket",
+          content: {
+            "application/json": {
+              schema: resolver(
+                z.object({
+                  status: z.literal("success"),
+                  id: z.string(),
+                  createdAt: z.string(),
+                }),
+              ),
+            },
+          },
+        },
+      },
+    }),
+    zValidator("json", staffCreateTicketSchema),
+    async (c) => {
+      const db = c.var.db;
+      const payload = c.req.valid("json");
+      const creatorId = c.var.userId;
+      const creatorRole = c.var.role;
+
+      if (!validateJSONContent(payload.description)) {
+        throw new HTTPException(422, {
+          message: "Invalid description!",
+        });
+      }
+
+      const customer = await db.query.users.findFirst({
+        where: and(
+          eq(schema.users.id, payload.customerId),
+          eq(schema.users.role, "customer"),
+        ),
+        columns: { id: true },
+      });
+      if (!customer) {
+        throw new HTTPException(404, {
+          message: "Customer not found",
+        });
+      }
+
+      const staffMap = c.var.staffMap();
+      const agentEntries = Array.from(staffMap.entries()).filter(
+        ([_, info]) => info.role === "agent",
+      );
+      if (creatorRole !== "agent" && agentEntries.length === 0) {
+        throw new HTTPException(400, {
+          message: c
+            .get("i18n")
+            .getFixedT(detectLocale(c))("no_agents_configured"),
+        });
+      }
+
+      const assigneeId =
+        creatorRole === "agent"
+          ? creatorId
+          : agentEntries.sort(
+              (a, b) => a[1].remainingTickets - b[1].remainingTickets,
+            )[0]![0];
+
+      const data = await db.transaction(async (tx) => {
+        const [createdTicket] = await tx
+          .insert(schema.tickets)
+          .values({
+            title: payload.title,
+            description: payload.description,
+            module: payload.module || "",
+            area: payload.area || "",
+            sealosNamespace: payload.sealosNamespace || "",
+            occurrenceTime: payload.occurrenceTime,
+            priority: payload.priority,
+            customerId: payload.customerId,
+            agentId: assigneeId,
+            status: payload.status,
+          })
+          .returning({
+            id: schema.tickets.id,
+            createdAt: schema.tickets.createdAt,
+          });
+
+        if (!createdTicket) {
+          throw new HTTPException(500, {
+            message: "Failed to create ticket",
+          });
+        }
+
+        await tx.insert(schema.ticketHistory).values({
+          ticketId: createdTicket.id,
+          type: "create",
+          meta: assigneeId,
+          operatorId: creatorId,
+          description: `Ticket created for customer ${payload.customerId}`,
+        });
+
+        return createdTicket;
+      });
+
+      c.var.incrementAgentTicket(assigneeId);
+      c.var.incrementTodayTicketCount();
+
+      emit(Events.TicketHotIssueAnalysis, {
+        ticketId: data.id,
+        title: payload.title,
+        description: payload.description,
+      });
+
+      return c.json({
+        status: "success" as const,
+        id: data.id,
+        createdAt: data.createdAt,
       });
     },
   )

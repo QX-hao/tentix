@@ -62,6 +62,7 @@ import useDebounce from "@hook/use-debounce";
 import { userTablePagination } from "@store/table-pagination";
 import { cn } from "@lib/utils";
 import { useSealos } from "src/_provider/sealos";
+import { useAuth } from "@hook/use-local-user";
 
 interface PaginatedTableProps {
   character: "user" | "staff";
@@ -75,6 +76,10 @@ export function PaginatedDataTable({
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const { isSealos } = useSealos();
+  const { user } = useAuth();
+  const canCreateForCustomer = ["agent", "technician", "admin"].includes(
+    user?.role ?? "",
+  );
   const isEmbedded =
     typeof window !== "undefined" && window.self !== window.top;
   const shouldApplyEmbeddedBottomInset = isSealos || isEmbedded;
@@ -1340,6 +1345,18 @@ export function PaginatedDataTable({
                   {joinTrans([t("create"), t("tkt_one")])}
                 </span>
                 <span className="lg:hidden">{t("create")}</span>
+              </Button>
+            </Link>
+          )}
+          {character === "staff" && canCreateForCustomer && (
+            <Link to="/staff/tickets/new">
+              <Button
+                variant="default"
+                size="sm"
+                className="h-[40px] shrink-0 gap-2 rounded-lg px-4"
+              >
+                <PlusIcon className="h-4 w-4" />
+                <span>给客户建单</span>
               </Button>
             </Link>
           )}

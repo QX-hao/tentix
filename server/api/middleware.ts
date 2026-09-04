@@ -207,6 +207,18 @@ export function customerOnlyMiddleware(
     await next();
   });
 }
+
+export function ticketCreationStaffOnlyMiddleware(
+  message: string = "Forbidden. Only agent, technician, or admin can create tickets for customers.",
+) {
+  return createMiddleware<AuthEnv>(async (c, next) => {
+    const role = c.get("role");
+    if (!["agent", "technician", "admin"].includes(role)) {
+      throw new HTTPException(403, { message });
+    }
+    await next();
+  });
+}
 export const factory = createFactory<MyEnv>({
   initApp: (app) => {
     app.use(async (c, next) => {

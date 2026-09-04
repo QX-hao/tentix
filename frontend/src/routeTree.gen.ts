@@ -20,6 +20,7 @@ import { Route as StaffAnalyticsIndexRouteImport } from './routes/staff/analytic
 import { Route as UserTicketsListRouteImport } from './routes/user/tickets/list'
 import { Route as UserTicketsIdRouteImport } from './routes/user/tickets/$id'
 import { Route as StaffWorkflowIdRouteImport } from './routes/staff/workflow_.$id'
+import { Route as StaffTicketsNewRouteImport } from './routes/staff/tickets/new'
 import { Route as StaffTicketsListRouteImport } from './routes/staff/tickets/list'
 import { Route as StaffTicketsAllRouteImport } from './routes/staff/tickets/all'
 import { Route as StaffTicketsIdRouteImport } from './routes/staff/tickets/$id'
@@ -79,6 +80,11 @@ const StaffWorkflowIdRoute = StaffWorkflowIdRouteImport.update({
   path: '/workflow/$id',
   getParentRoute: () => StaffRoute,
 } as any)
+const StaffTicketsNewRoute = StaffTicketsNewRouteImport.update({
+  id: '/tickets/new',
+  path: '/tickets/new',
+  getParentRoute: () => StaffRoute,
+} as any)
 const StaffTicketsListRoute = StaffTicketsListRouteImport.update({
   id: '/tickets/list',
   path: '/tickets/list',
@@ -105,6 +111,7 @@ export interface FileRoutesByFullPath {
   '/staff/tickets/$id': typeof StaffTicketsIdRoute
   '/staff/tickets/all': typeof StaffTicketsAllRoute
   '/staff/tickets/list': typeof StaffTicketsListRoute
+  '/staff/tickets/new': typeof StaffTicketsNewRoute
   '/staff/workflow/$id': typeof StaffWorkflowIdRoute
   '/user/tickets/$id': typeof UserTicketsIdRoute
   '/user/tickets/list': typeof UserTicketsListRoute
@@ -121,6 +128,7 @@ export interface FileRoutesByTo {
   '/staff/tickets/$id': typeof StaffTicketsIdRoute
   '/staff/tickets/all': typeof StaffTicketsAllRoute
   '/staff/tickets/list': typeof StaffTicketsListRoute
+  '/staff/tickets/new': typeof StaffTicketsNewRoute
   '/staff/workflow/$id': typeof StaffWorkflowIdRoute
   '/user/tickets/$id': typeof UserTicketsIdRoute
   '/user/tickets/list': typeof UserTicketsListRoute
@@ -138,6 +146,7 @@ export interface FileRoutesById {
   '/staff/tickets/$id': typeof StaffTicketsIdRoute
   '/staff/tickets/all': typeof StaffTicketsAllRoute
   '/staff/tickets/list': typeof StaffTicketsListRoute
+  '/staff/tickets/new': typeof StaffTicketsNewRoute
   '/staff/workflow_/$id': typeof StaffWorkflowIdRoute
   '/user/tickets/$id': typeof UserTicketsIdRoute
   '/user/tickets/list': typeof UserTicketsListRoute
@@ -156,6 +165,7 @@ export interface FileRouteTypes {
     | '/staff/tickets/$id'
     | '/staff/tickets/all'
     | '/staff/tickets/list'
+    | '/staff/tickets/new'
     | '/staff/workflow/$id'
     | '/user/tickets/$id'
     | '/user/tickets/list'
@@ -172,6 +182,7 @@ export interface FileRouteTypes {
     | '/staff/tickets/$id'
     | '/staff/tickets/all'
     | '/staff/tickets/list'
+    | '/staff/tickets/new'
     | '/staff/workflow/$id'
     | '/user/tickets/$id'
     | '/user/tickets/list'
@@ -188,6 +199,7 @@ export interface FileRouteTypes {
     | '/staff/tickets/$id'
     | '/staff/tickets/all'
     | '/staff/tickets/list'
+    | '/staff/tickets/new'
     | '/staff/workflow_/$id'
     | '/user/tickets/$id'
     | '/user/tickets/list'
@@ -268,6 +280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StaffTicketsListRouteImport
       parentRoute: typeof StaffRoute
     }
+    '/staff/tickets/new': {
+      id: '/staff/tickets/new'
+      path: '/tickets/new'
+      fullPath: '/staff/tickets/new'
+      preLoaderRoute: typeof StaffTicketsNewRouteImport
+      parentRoute: typeof StaffRoute
+    }
     '/staff/workflow_/$id': {
       id: '/staff/workflow_/$id'
       path: '/workflow/$id'
@@ -311,6 +330,7 @@ interface StaffRouteChildren {
   StaffTicketsIdRoute: typeof StaffTicketsIdRoute
   StaffTicketsAllRoute: typeof StaffTicketsAllRoute
   StaffTicketsListRoute: typeof StaffTicketsListRoute
+  StaffTicketsNewRoute: typeof StaffTicketsNewRoute
   StaffWorkflowIdRoute: typeof StaffWorkflowIdRoute
   StaffAnalyticsIndexRoute: typeof StaffAnalyticsIndexRoute
 }
@@ -320,6 +340,7 @@ const StaffRouteChildren: StaffRouteChildren = {
   StaffTicketsIdRoute: StaffTicketsIdRoute,
   StaffTicketsAllRoute: StaffTicketsAllRoute,
   StaffTicketsListRoute: StaffTicketsListRoute,
+  StaffTicketsNewRoute: StaffTicketsNewRoute,
   StaffWorkflowIdRoute: StaffWorkflowIdRoute,
   StaffAnalyticsIndexRoute: StaffAnalyticsIndexRoute,
 }
