@@ -11,7 +11,7 @@ import {
   logInfo,
 } from "@/utils/index.ts";
 import * as schema from "@db/schema.ts";
-import { eq, and, asc, desc, count, or, like, inArray, gte, lte, sql } from "drizzle-orm";
+import { eq, and, asc, desc, count, or, like, inArray, gt, gte, lte, sql } from "drizzle-orm";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi/zod";
 import { z } from "zod";
@@ -90,11 +90,22 @@ const staffCreateTicketSchema = ticketInsertSchema.extend({
   customerId: z.number().int().positive(),
 });
 
-const customerListItemSchema = z.object({
+const customerItemSchema = z.object({
   id: z.number().int().positive(),
+  providerUserId: z.string(),
   name: z.string(),
   nickname: z.string(),
   realName: z.string(),
+});
+
+const customerQuerySchema = z.object({
+  keyword: z.string().trim().max(128).optional(),
+  cursor: z.string().trim().max(128).optional(),
+});
+
+const customerPageSchema = z.object({
+  items: z.array(customerItemSchema),
+  hasNext: z.boolean(),
 });
 
 const ticketInfoResponseSchema = zs.ticket.extend({
@@ -269,33 +280,56 @@ const ticketRouter = factory
     "/customers",
     ticketCreationStaffOnlyMiddleware(),
     describeRoute({
-      description: "Get customers available for staff-created tickets",
+      description:
+        "Get a page of Sealos customers for a staff-created ticket",
       tags: ["Ticket"],
       responses: {
         200: {
-          description: "Customer list",
+          description: "Customer page",
           content: {
             "application/json": {
-              schema: resolver(z.array(customerListItemSchema)),
+              schema: resolver(customerPageSchema),
             },
           },
         },
       },
     }),
+    zValidator("query", customerQuerySchema),
     async (c) => {
+      const { keyword, cursor } = c.req.valid("query");
+      const pageSize = 10;
+      const conditions = [
+        eq(schema.userIdentities.provider, "sealos"),
+        eq(schema.users.role, "customer"),
+      ];
+
+      if (keyword) {
+        conditions.push(eq(schema.userIdentities.providerUserId, keyword));
+      } else if (cursor) {
+        conditions.push(gt(schema.userIdentities.providerUserId, cursor));
+      }
+
       const customers = await c.var.db
         .select({
           id: schema.users.id,
+          providerUserId: schema.userIdentities.providerUserId,
           name: schema.users.name,
           nickname: schema.users.nickname,
           realName: schema.users.realName,
         })
-        .from(schema.users)
-        .where(eq(schema.users.role, "customer"))
-        .orderBy(asc(schema.users.name))
-        .limit(1000);
+        .from(schema.userIdentities)
+        .innerJoin(
+          schema.users,
+          eq(schema.userIdentities.userId, schema.users.id),
+        )
+        .where(and(...conditions))
+        .orderBy(asc(schema.userIdentities.providerUserId))
+        .limit(pageSize + 1);
 
-      return c.json(customers);
+      return c.json({
+        items: customers.slice(0, pageSize),
+        hasNext: customers.length > pageSize,
+      });
     },
   )
   .post(

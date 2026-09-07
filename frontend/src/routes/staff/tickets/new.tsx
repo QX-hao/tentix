@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,6 +9,9 @@ import {
   DescriptionEditor,
   Input,
   Label,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Select,
   SelectContent,
   SelectItem,
@@ -15,7 +19,14 @@ import {
   SelectValue,
   useToast,
 } from "tentix-ui";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUpDown,
+  Loader2,
+} from "lucide-react";
 import { useTranslation } from "i18n";
 import { apiClient } from "@lib/api-client";
 import { useTicketModules } from "@store/app-config";
@@ -24,9 +35,14 @@ import type { JSONContentZod } from "tentix-server/types";
 import { useSealos } from "src/_provider/sealos";
 import { RouteTransition } from "@comp/page-transition";
 import { StaffSidebar } from "@comp/staff/sidebar";
+import useDebounce from "@hook/use-debounce";
 
 const createStaffTicketSchema = z.object({
-  customerId: z.coerce.number().int().positive("请选择客户"),
+  customerProviderUserId: z
+    .string()
+    .trim()
+    .min(1, "请输入客户 ID")
+    .max(128, "客户 ID 不能超过 128 个字符"),
   title: z.string().trim().min(3, "标题至少需要3个字符"),
   module: z.string().min(1, "请选择模块"),
   description: z.any(),
@@ -34,6 +50,14 @@ const createStaffTicketSchema = z.object({
 });
 
 type CreateStaffTicketData = z.infer<typeof createStaffTicketSchema>;
+
+type CustomerItem = {
+  id: number;
+  providerUserId: string;
+  name: string;
+  nickname: string;
+  realName: string;
+};
 
 export const Route = createFileRoute("/staff/tickets/new")({
   component: RouteComponent,
@@ -47,22 +71,19 @@ function RouteComponent() {
   const ticketModules = useTicketModules();
   const { sealosArea, sealosNs, isSealos } = useSealos();
   const currentLang = i18n.language === "zh" ? "zh-CN" : "en-US";
-
-  const { data: customers = [], isLoading: isLoadingCustomers } = useQuery({
-    queryKey: ["ticket-customers"],
-    queryFn: async () => {
-      const response = await apiClient.ticket.customers.$get();
-      if (!response.ok) {
-        throw new Error("加载客户列表失败");
-      }
-      return response.json();
-    },
-  });
-
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerPage, setCustomerPage] = useState(1);
+  const [customerPageCursors, setCustomerPageCursors] = useState<
+    Array<string | undefined>
+  >([undefined]);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerItem | null>(
+    null,
+  );
   const form = useForm<CreateStaffTicketData>({
     resolver: zodResolver(createStaffTicketSchema),
     defaultValues: {
-      customerId: undefined,
+      customerProviderUserId: "",
       title: "",
       module: "",
       description: {
@@ -72,12 +93,50 @@ function RouteComponent() {
       priority: ticketPriorityEnumArray[3],
     },
   });
+  const debouncedCustomerSearch = useDebounce(customerSearch.trim(), 300);
+  const isCustomerSearchPending =
+    customerSearch.trim() !== debouncedCustomerSearch;
+
+  const {
+    data: customerPageData,
+    isFetching: isLoadingCustomers,
+    isError: isCustomerListError,
+  } = useQuery({
+    queryKey: [
+      "ticket-customers",
+      customerPageCursors[customerPage - 1],
+      debouncedCustomerSearch,
+    ],
+    queryFn: async () => {
+      const response = await apiClient.ticket.customers.$get({
+        query: {
+          keyword: debouncedCustomerSearch || undefined,
+          cursor: debouncedCustomerSearch
+            ? undefined
+            : customerPageCursors[customerPage - 1],
+        },
+      });
+      if (!response.ok) {
+        throw new Error("加载客户列表失败");
+      }
+      return response.json();
+    },
+    enabled: customerPickerOpen,
+    retry: false,
+  });
+  const customers = customerPageData?.items ?? [];
 
   const createTicketMutation = useMutation({
-    mutationFn: async (data: CreateStaffTicketData) => {
+    mutationFn: async ({
+      data,
+      customerId,
+    }: {
+      data: CreateStaffTicketData;
+      customerId: number;
+    }) => {
       const response = await apiClient.ticket["create-for-customer"].$post({
         json: {
-          customerId: data.customerId,
+          customerId,
           title: data.title,
           module: data.module,
           description: data.description,
@@ -109,7 +168,24 @@ function RouteComponent() {
   });
 
   const onSubmit = (data: CreateStaffTicketData) => {
-    createTicketMutation.mutate(data);
+    if (
+      !selectedCustomer ||
+      selectedCustomer.providerUserId !== data.customerProviderUserId.trim()
+    ) {
+      form.setError("customerProviderUserId", {
+        message: "请先输入有效的客户 ID",
+      });
+      return;
+    }
+    createTicketMutation.mutate({ data, customerId: selectedCustomer.id });
+  };
+
+  const selectCustomer = (customer: CustomerItem) => {
+    setSelectedCustomer(customer);
+    form.setValue("customerProviderUserId", customer.providerUserId, {
+      shouldValidate: true,
+    });
+    setCustomerPickerOpen(false);
   };
 
   return (
@@ -135,7 +211,7 @@ function RouteComponent() {
             <Button
               type="submit"
               form="staff-create-ticket-form"
-              disabled={createTicketMutation.isPending || isLoadingCustomers}
+              disabled={createTicketMutation.isPending || !selectedCustomer}
             >
               {createTicketMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -152,48 +228,163 @@ function RouteComponent() {
             <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8">
               <div className="grid gap-5 sm:grid-cols-2">
                 <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="customer">客户</Label>
-                  <Controller
-                    control={form.control}
-                    name="customerId"
-                    render={({ field, fieldState }) => (
-                      <>
-                        <Select
-                          value={field.value ? String(field.value) : ""}
-                          onValueChange={(value) => field.onChange(Number(value))}
-                          disabled={isLoadingCustomers}
-                        >
-                          <SelectTrigger id="customer">
-                            <SelectValue
-                              placeholder={
-                                isLoadingCustomers
-                                  ? "加载客户中..."
-                                  : "选择客户"
-                              }
-                            />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {customers.map((customer) => (
-                              <SelectItem
-                                key={customer.id}
-                                value={String(customer.id)}
-                              >
-                                {customer.realName || customer.nickname || customer.name}
-                                {customer.name !== customer.realName &&
-                                  customer.realName &&
-                                  ` (${customer.name})`}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {fieldState.error && (
-                          <p className="text-sm text-red-600">
-                            {fieldState.error.message}
-                          </p>
-                        )}
-                      </>
-                    )}
+                  <Label htmlFor="customerProviderUserId">客户 ID</Label>
+                  <input
+                    type="hidden"
+                    {...form.register("customerProviderUserId")}
                   />
+                  <Popover
+                    open={customerPickerOpen}
+                    onOpenChange={(open) => {
+                      setCustomerPickerOpen(open);
+                      if (open) {
+                        setCustomerSearch("");
+                        setCustomerPage(1);
+                        setCustomerPageCursors([undefined]);
+                      }
+                    }}
+                  >
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="customerProviderUserId"
+                        type="button"
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={customerPickerOpen}
+                        className="h-auto min-h-10 w-full justify-between px-3 py-2 font-normal"
+                      >
+                        {selectedCustomer ? (
+                          <span className="min-w-0 text-left">
+                            <span className="block truncate text-zinc-900">
+                              {selectedCustomer.realName ||
+                                selectedCustomer.nickname ||
+                                selectedCustomer.name}
+                            </span>
+                            <span className="block truncate text-xs text-zinc-500">
+                              {selectedCustomer.providerUserId}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-zinc-500">选择客户</span>
+                        )}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-zinc-400" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      className="w-[--radix-popover-trigger-width] p-0"
+                    >
+                      <div className="border-b border-zinc-200 p-2">
+                        <Input
+                          value={customerSearch}
+                          maxLength={128}
+                          placeholder="输入完整客户 ID"
+                          onChange={(event) => {
+                            setCustomerSearch(event.target.value);
+                            setCustomerPage(1);
+                            setCustomerPageCursors([undefined]);
+                          }}
+                        />
+                      </div>
+                      <div className="h-[440px] overflow-y-auto">
+                        {isLoadingCustomers || isCustomerSearchPending ? (
+                          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            加载中
+                          </div>
+                        ) : isCustomerListError ? (
+                          <div className="flex h-full items-center justify-center px-4 text-sm text-red-600">
+                            加载客户失败，请重试
+                          </div>
+                        ) : customers.length === 0 ? (
+                          <div className="flex h-full items-center justify-center px-4 text-sm text-zinc-500">
+                            未找到客户
+                          </div>
+                        ) : (
+                          customers.map((customer) => {
+                            const displayName =
+                              customer.realName ||
+                              customer.nickname ||
+                              customer.name;
+                            const selected =
+                              selectedCustomer?.id === customer.id;
+
+                            return (
+                              <button
+                                key={customer.providerUserId}
+                                type="button"
+                                className="flex h-11 w-full items-center gap-2 px-3 text-left hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none"
+                                onClick={() => selectCustomer(customer)}
+                              >
+                                <Check
+                                  className={`h-4 w-4 shrink-0 ${selected ? "opacity-100" : "opacity-0"}`}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-sm text-zinc-900">
+                                    {displayName}
+                                  </span>
+                                  <span className="block truncate text-xs text-zinc-500">
+                                    {customer.providerUserId}
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                      <div className="flex h-12 items-center justify-center gap-3 border-t border-zinc-200 px-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="上一页"
+                          title="上一页"
+                          disabled={
+                            customerPage <= 1 ||
+                            isLoadingCustomers ||
+                            isCustomerSearchPending
+                          }
+                          onClick={() =>
+                            setCustomerPage((page) => Math.max(1, page - 1))
+                          }
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        <span className="min-w-16 text-center text-sm text-zinc-600">
+                          第 {customerPage} 页
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="下一页"
+                          title="下一页"
+                          disabled={
+                            !customerPageData?.hasNext ||
+                            isLoadingCustomers ||
+                            isCustomerSearchPending
+                          }
+                          onClick={() => {
+                            const lastCustomer = customers.at(-1);
+                            if (!lastCustomer) return;
+
+                            setCustomerPageCursors((cursors) => [
+                              ...cursors.slice(0, customerPage),
+                              lastCustomer.providerUserId,
+                            ]);
+                            setCustomerPage((page) => page + 1);
+                          }}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {form.formState.errors.customerProviderUserId ? (
+                    <p className="text-sm text-red-600">
+                      {form.formState.errors.customerProviderUserId.message}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="space-y-2 sm:col-span-2">
