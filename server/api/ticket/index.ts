@@ -1,5 +1,4 @@
 import {
-  connectDB,
   getAbbreviatedText,
   getFeishuAppAccessToken,
   getFeishuCard,
@@ -108,6 +107,77 @@ const customerPageSchema = z.object({
   hasNext: z.boolean(),
 });
 
+type TicketCreationPayload = z.infer<typeof ticketInsertSchema>;
+
+async function createTicket({
+  db,
+  payload,
+  customerId,
+  assigneeId,
+  operatorId,
+  historyDescription,
+  incrementAgentTicket,
+  incrementTodayTicketCount,
+}: {
+  db: ReturnType<typeof import("@/utils/index.ts").connectDB>;
+  payload: TicketCreationPayload;
+  customerId: number;
+  assigneeId: number;
+  operatorId: number;
+  historyDescription?: string;
+  incrementAgentTicket: (id: number) => void;
+  incrementTodayTicketCount: () => number;
+}) {
+  const data = await db.transaction(async (tx) => {
+    const [createdTicket] = await tx
+      .insert(schema.tickets)
+      .values({
+        // Don't use destructuring: user input is not trusted.
+        title: payload.title,
+        description: payload.description,
+        module: payload.module || "",
+        area: payload.area || "",
+        sealosNamespace: payload.sealosNamespace || "",
+        occurrenceTime: payload.occurrenceTime,
+        priority: payload.priority,
+        customerId,
+        agentId: assigneeId,
+        status: payload.status,
+      })
+      .returning({
+        id: schema.tickets.id,
+        createdAt: schema.tickets.createdAt,
+      });
+
+    if (!createdTicket) {
+      throw new HTTPException(500, {
+        message: "Failed to create ticket",
+      });
+    }
+
+    await tx.insert(schema.ticketHistory).values({
+      ticketId: createdTicket.id,
+      type: "create",
+      meta: assigneeId,
+      operatorId,
+      description: historyDescription,
+    });
+
+    return createdTicket;
+  });
+
+  incrementAgentTicket(assigneeId);
+  incrementTodayTicketCount();
+
+  emit(Events.TicketHotIssueAnalysis, {
+    ticketId: data.id,
+    title: payload.title,
+    description: payload.description,
+  });
+
+  return data;
+}
+
 const ticketInfoResponseSchema = zs.ticket.extend({
   // 扩展客户信息
   customer: zs.users.extend({ sealosId: z.string().optional() }),
@@ -178,7 +248,7 @@ const ticketRouter = factory
     }),
     zValidator("json", ticketInsertSchema),
     async (c) => {
-      const db = connectDB();
+      const db = c.var.db;
       const payload = c.req.valid("json");
       const userId = c.var.userId;
       const role = c.var.role;
@@ -210,68 +280,19 @@ const ticketRouter = factory
           (a, b) => a[1].remainingTickets - b[1].remainingTickets,
         )[0]!;
 
-      let ticketId: string | undefined;
-
-      await db.transaction(async (tx) => {
-        const [data] = await tx
-          .insert(schema.tickets)
-          .values({
-            // don't use destructuring, user input is not trusted
-            title: payload.title,
-            description: payload.description,
-            module: payload.module || "",
-            area: payload.area || "",
-            sealosNamespace: payload.sealosNamespace || "",
-            occurrenceTime: payload.occurrenceTime,
-            priority: payload.priority,
-            customerId: userId,
-            agentId: assigneeId,
-            status: payload.status,
-          })
-          .returning({
-            id: schema.tickets.id,
-            createdAt: schema.tickets.createdAt,
-            description: schema.tickets.description,
-          });
-
-        if (!data) {
-          throw new HTTPException(500, {
-            message: "Failed to create ticket",
-          });
-        }
-
-        ticketId = data.id;
-
-        // Assign ticket to agent with least in-progress tickets
-        c.var.incrementAgentTicket(assigneeId);
-
-        // Update ticket status to in_progress
-        await tx.insert(schema.ticketHistory).values({
-          ticketId: data.id,
-          type: "create",
-          meta: assigneeId, // assignee
-          operatorId: userId,
-        });
-      });
-
-      if (!ticketId) {
-        throw new HTTPException(500, {
-          message: "Failed to create ticket",
-        });
-      }
-
-      c.var.incrementTodayTicketCount();
-
-      // 发出工单分析事件，异步处理，不阻塞工单创建
-      emit(Events.TicketHotIssueAnalysis, {
-        ticketId,
-        title: payload.title,
-        description: payload.description,
+      const data = await createTicket({
+        db,
+        payload,
+        customerId: userId,
+        assigneeId,
+        operatorId: userId,
+        incrementAgentTicket: c.var.incrementAgentTicket,
+        incrementTodayTicketCount: c.var.incrementTodayTicketCount,
       });
 
       return c.json({
         status: "success",
-        id: ticketId,
+        id: data.id,
         createdAt: new Date().toISOString(),
       });
     },
@@ -400,50 +421,15 @@ const ticketRouter = factory
               (a, b) => a[1].remainingTickets - b[1].remainingTickets,
             )[0]![0];
 
-      const data = await db.transaction(async (tx) => {
-        const [createdTicket] = await tx
-          .insert(schema.tickets)
-          .values({
-            title: payload.title,
-            description: payload.description,
-            module: payload.module || "",
-            area: payload.area || "",
-            sealosNamespace: payload.sealosNamespace || "",
-            occurrenceTime: payload.occurrenceTime,
-            priority: payload.priority,
-            customerId: payload.customerId,
-            agentId: assigneeId,
-            status: payload.status,
-          })
-          .returning({
-            id: schema.tickets.id,
-            createdAt: schema.tickets.createdAt,
-          });
-
-        if (!createdTicket) {
-          throw new HTTPException(500, {
-            message: "Failed to create ticket",
-          });
-        }
-
-        await tx.insert(schema.ticketHistory).values({
-          ticketId: createdTicket.id,
-          type: "create",
-          meta: assigneeId,
-          operatorId: creatorId,
-          description: `Ticket created for customer ${payload.customerId}`,
-        });
-
-        return createdTicket;
-      });
-
-      c.var.incrementAgentTicket(assigneeId);
-      c.var.incrementTodayTicketCount();
-
-      emit(Events.TicketHotIssueAnalysis, {
-        ticketId: data.id,
-        title: payload.title,
-        description: payload.description,
+      const data = await createTicket({
+        db,
+        payload,
+        customerId: payload.customerId,
+        assigneeId,
+        operatorId: creatorId,
+        historyDescription: `Ticket created for customer ${payload.customerId}`,
+        incrementAgentTicket: c.var.incrementAgentTicket,
+        incrementTodayTicketCount: c.var.incrementTodayTicketCount,
       });
 
       return c.json({

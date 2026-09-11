@@ -36,20 +36,25 @@ import { useSealos } from "src/_provider/sealos";
 import { RouteTransition } from "@comp/page-transition";
 import { StaffSidebar } from "@comp/staff/sidebar";
 import useDebounce from "@hook/use-debounce";
+import { processFilesAndUpload } from "@comp/chat/upload-utils";
+import type { TFunction } from "i18next";
 
-const createStaffTicketSchema = z.object({
-  customerProviderUserId: z
-    .string()
-    .trim()
-    .min(1, "请输入客户 ID")
-    .max(128, "客户 ID 不能超过 128 个字符"),
-  title: z.string().trim().min(3, "标题至少需要3个字符"),
-  module: z.string().min(1, "请选择模块"),
-  description: z.any(),
-  priority: z.enum(ticketPriorityEnumArray),
-});
+const createStaffTicketSchema = (t: TFunction) =>
+  z.object({
+    customerProviderUserId: z
+      .string()
+      .trim()
+      .min(1, t("customer_id_required"))
+      .max(128, t("customer_id_max_length")),
+    title: z.string().trim().min(3, t("title_min_length")),
+    module: z.string().min(1, t("please_select_module")),
+    description: z.any(),
+    priority: z.enum(ticketPriorityEnumArray),
+  });
 
-type CreateStaffTicketData = z.infer<typeof createStaffTicketSchema>;
+type CreateStaffTicketData = z.infer<
+  ReturnType<typeof createStaffTicketSchema>
+>;
 
 type CustomerItem = {
   id: number;
@@ -81,7 +86,7 @@ function RouteComponent() {
     null,
   );
   const form = useForm<CreateStaffTicketData>({
-    resolver: zodResolver(createStaffTicketSchema),
+    resolver: zodResolver(createStaffTicketSchema(t)),
     defaultValues: {
       customerProviderUserId: "",
       title: "",
@@ -117,7 +122,7 @@ function RouteComponent() {
         },
       });
       if (!response.ok) {
-        throw new Error("加载客户列表失败");
+        throw new Error(t("customer_list_load_failed"));
       }
       return response.json();
     },
@@ -134,12 +139,15 @@ function RouteComponent() {
       data: CreateStaffTicketData;
       customerId: number;
     }) => {
+      const { processedContent } = await processFilesAndUpload(
+        data.description as JSONContentZod,
+      );
       const response = await apiClient.ticket["create-for-customer"].$post({
         json: {
           customerId,
           title: data.title,
           module: data.module,
-          description: data.description,
+          description: processedContent,
           area: isSealos ? sealosArea || "hzh" : "",
           sealosNamespace: isSealos ? sealosNs || "" : "",
           occurrenceTime: new Date().toISOString(),
@@ -149,18 +157,18 @@ function RouteComponent() {
 
       if (!response.ok) {
         const error = (await response.json()) as { message?: string };
-        throw new Error(error.message || "创建工单失败");
+        throw new Error(error.message || t("ticket_create_failed"));
       }
       return response.json();
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["getAllTickets"] });
-      toast({ title: "工单创建成功" });
+      toast({ title: t("ticket_created") });
       navigate({ to: "/staff/tickets/$id", params: { id: data.id } });
     },
     onError: (error: Error) => {
       toast({
-        title: "工单创建失败",
+        title: t("ticket_create_failed"),
         description: error.message,
         variant: "destructive",
       });
@@ -173,7 +181,7 @@ function RouteComponent() {
       selectedCustomer.providerUserId !== data.customerProviderUserId.trim()
     ) {
       form.setError("customerProviderUserId", {
-        message: "请先输入有效的客户 ID",
+        message: t("select_valid_customer"),
       });
       return;
     }
@@ -199,13 +207,13 @@ function RouteComponent() {
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label="返回工单列表"
+                aria-label={t("back_to_ticket_list")}
                 onClick={() => navigate({ to: "/staff/tickets/list" })}
               >
                 <ArrowLeft className="h-5 w-5" />
               </Button>
               <h1 className="text-xl font-semibold text-zinc-900">
-                给客户创建工单
+                {t("create_ticket_for_customer")}
               </h1>
             </div>
             <Button
@@ -216,7 +224,9 @@ function RouteComponent() {
               {createTicketMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin" />
               )}
-              {createTicketMutation.isPending ? "创建中" : "创建工单"}
+              {createTicketMutation.isPending
+                ? t("creating_ticket")
+                : t("create_new_ticket")}
             </Button>
           </header>
 
@@ -228,7 +238,9 @@ function RouteComponent() {
             <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8">
               <div className="grid gap-5 sm:grid-cols-2">
                 <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="customerProviderUserId">客户 ID</Label>
+                  <Label htmlFor="customerProviderUserId">
+                    {t("customer_id")}
+                  </Label>
                   <input
                     type="hidden"
                     {...form.register("customerProviderUserId")}
@@ -265,7 +277,9 @@ function RouteComponent() {
                             </span>
                           </span>
                         ) : (
-                          <span className="text-zinc-500">选择客户</span>
+                          <span className="text-zinc-500">
+                            {t("select_customer")}
+                          </span>
                         )}
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-zinc-400" />
                       </Button>
@@ -278,7 +292,7 @@ function RouteComponent() {
                         <Input
                           value={customerSearch}
                           maxLength={128}
-                          placeholder="输入完整客户 ID"
+                          placeholder={t("customer_id_placeholder")}
                           onChange={(event) => {
                             setCustomerSearch(event.target.value);
                             setCustomerPage(1);
@@ -290,15 +304,15 @@ function RouteComponent() {
                         {isLoadingCustomers || isCustomerSearchPending ? (
                           <div className="flex h-full items-center justify-center text-sm text-zinc-500">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            加载中
+                            {t("loading")}
                           </div>
                         ) : isCustomerListError ? (
                           <div className="flex h-full items-center justify-center px-4 text-sm text-red-600">
-                            加载客户失败，请重试
+                            {t("customer_list_load_retry")}
                           </div>
                         ) : customers.length === 0 ? (
                           <div className="flex h-full items-center justify-center px-4 text-sm text-zinc-500">
-                            未找到客户
+                            {t("customer_not_found")}
                           </div>
                         ) : (
                           customers.map((customer) => {
@@ -337,8 +351,8 @@ function RouteComponent() {
                           type="button"
                           variant="ghost"
                           size="icon"
-                          aria-label="上一页"
-                          title="上一页"
+                          aria-label={t("previous_page")}
+                          title={t("previous_page")}
                           disabled={
                             customerPage <= 1 ||
                             isLoadingCustomers ||
@@ -351,14 +365,14 @@ function RouteComponent() {
                           <ChevronLeft className="h-4 w-4" />
                         </Button>
                         <span className="min-w-16 text-center text-sm text-zinc-600">
-                          第 {customerPage} 页
+                          {t("page_number", { page: customerPage })}
                         </span>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          aria-label="下一页"
-                          title="下一页"
+                          aria-label={t("next_page")}
+                          title={t("next_page")}
                           disabled={
                             !customerPageData?.hasNext ||
                             isLoadingCustomers ||
@@ -388,7 +402,7 @@ function RouteComponent() {
                 </div>
 
                 <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="title">标题</Label>
+                  <Label htmlFor="title">{t("title")}</Label>
                   <Input id="title" {...form.register("title")} />
                   {form.formState.errors.title && (
                     <p className="text-sm text-red-600">
@@ -398,20 +412,26 @@ function RouteComponent() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="module">模块</Label>
+                  <Label htmlFor="module">{t("module")}</Label>
                   <Controller
                     control={form.control}
                     name="module"
                     render={({ field, fieldState }) => (
                       <>
-                        <Select value={field.value} onValueChange={field.onChange}>
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                        >
                           <SelectTrigger id="module">
-                            <SelectValue placeholder={t("please_select_module")} />
+                            <SelectValue
+                              placeholder={t("please_select_module")}
+                            />
                           </SelectTrigger>
                           <SelectContent>
                             {ticketModules.map((module) => (
                               <SelectItem key={module.code} value={module.code}>
-                                {module.translations[currentLang] || module.code}
+                                {module.translations[currentLang] ||
+                                  module.code}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -427,19 +447,22 @@ function RouteComponent() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="priority">优先级</Label>
+                  <Label htmlFor="priority">{t("priority")}</Label>
                   <Controller
                     control={form.control}
                     name="priority"
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                      >
                         <SelectTrigger id="priority">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                           {ticketPriorityEnumArray.map((priority) => (
                             <SelectItem key={priority} value={priority}>
-                              {priority}
+                              {t(priority)}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -449,7 +472,7 @@ function RouteComponent() {
                 </div>
 
                 <div className="space-y-2 sm:col-span-2">
-                  <Label>描述</Label>
+                  <Label>{t("desc")}</Label>
                   <Controller
                     control={form.control}
                     name="description"
@@ -457,7 +480,9 @@ function RouteComponent() {
                       <DescriptionEditor
                         {...field}
                         value={field.value as JSONContentZod}
-                        onChange={(value) => field.onChange(value as JSONContentZod)}
+                        onChange={(value) =>
+                          field.onChange(value as JSONContentZod)
+                        }
                         output="json"
                         editable
                         editorContentClassName="min-h-52 overflow-auto"
