@@ -16,7 +16,7 @@ export const areaRegionUuidMap = {
   gzg: "6a216614-e658-4482-a244-e4311390715f",
   io: "2e07bb48-e88c-4bb8-b2c8-03198b8fe66d",
   usw: "00000000-0000-0000-0000-000000000000",
-  test: "00000000-0000-0000-0000-000000000000",
+  test: "79335e01-7035-4943-9f95-e1e692d5c19c",
 } as const;
 
 export const ticketCategoryEnumArray = [
